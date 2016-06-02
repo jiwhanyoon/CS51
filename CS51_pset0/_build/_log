@@ -1,0 +1,8 @@
+### Starting build.
+# Target: ps0.ml.depends, tags: { extension:ml, file:ps0.ml, ocaml, ocamldep, quiet, strict-sequence, thread, traverse, use_str, use_unix, warn(A-4-33-40-41-42-43-34-44) }
+/Users/KevinYoon/.ocamlbrew/ocaml-4.02.2/bin/ocamldep.opt -modules ps0.ml > ps0.ml.depends
+# Target: ps0.cmo, tags: { byte, compile, extension:cmo, extension:ml, file:ps0.cmo, file:ps0.ml, implem, ocaml, quiet, strict-sequence, thread, traverse, use_str, use_unix, warn(A-4-33-40-41-42-43-34-44) }
+/Users/KevinYoon/.ocamlbrew/ocaml-4.02.2/bin/ocamlc.opt -c -thread -strict-sequence -w A-4-33-40-41-42-43-34-44 -o ps0.cmo ps0.ml
+# Target: ps0.byte, tags: { byte, dont_link_with, extension:byte, file:ps0.byte, link, ocaml, program, quiet, strict-sequence, thread, traverse, use_str, use_unix, warn(A-4-33-40-41-42-43-34-44) }
+/Users/KevinYoon/.ocamlbrew/ocaml-4.02.2/bin/ocamlc.opt unix.cma str.cma -thread threads.cma ps0.cmo -o ps0.byte
+# Compilation successful.

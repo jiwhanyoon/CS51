@@ -1,0 +1,12 @@
+### Starting build.
+# Target: mapfold_tests.ml.depends, tags: { extension:ml, file:mapfold_tests.ml, ocaml, ocamldep, quiet, strict-sequence, thread, traverse, use_str, use_unix, warn(A-4-33-40-41-42-43-34-44) }
+/Users/KevinYoon/.ocamlbrew/ocaml-4.02.2/bin/ocamldep.opt -modules mapfold_tests.ml > mapfold_tests.ml.depends
+# Target: mapfold.ml.depends, tags: { extension:ml, file:mapfold.ml, ocaml, ocamldep, quiet, strict-sequence, thread, traverse, use_str, use_unix, warn(A-4-33-40-41-42-43-34-44) }
+/Users/KevinYoon/.ocamlbrew/ocaml-4.02.2/bin/ocamldep.opt -modules mapfold.ml > mapfold.ml.depends # cached
+# Target: mapfold.cmo, tags: { byte, compile, extension:cmo, extension:ml, file:mapfold.cmo, file:mapfold.ml, implem, ocaml, quiet, strict-sequence, thread, traverse, use_str, use_unix, warn(A-4-33-40-41-42-43-34-44) }
+/Users/KevinYoon/.ocamlbrew/ocaml-4.02.2/bin/ocamlc.opt -c -thread -strict-sequence -w A-4-33-40-41-42-43-34-44 -o mapfold.cmo mapfold.ml # cached
+# Target: mapfold_tests.cmo, tags: { byte, compile, extension:cmo, extension:ml, file:mapfold_tests.cmo, file:mapfold_tests.ml, implem, ocaml, quiet, strict-sequence, thread, traverse, use_str, use_unix, warn(A-4-33-40-41-42-43-34-44) }
+/Users/KevinYoon/.ocamlbrew/ocaml-4.02.2/bin/ocamlc.opt -c -thread -strict-sequence -w A-4-33-40-41-42-43-34-44 -o mapfold_tests.cmo mapfold_tests.ml
+# Target: mapfold_tests.byte, tags: { byte, dont_link_with, extension:byte, file:mapfold_tests.byte, link, ocaml, program, quiet, strict-sequence, thread, traverse, use_str, use_unix, warn(A-4-33-40-41-42-43-34-44) }
+/Users/KevinYoon/.ocamlbrew/ocaml-4.02.2/bin/ocamlc.opt unix.cma str.cma -thread threads.cma mapfold.cmo mapfold_tests.cmo -o mapfold_tests.byte
+# Compilation successful.
