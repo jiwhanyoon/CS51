@@ -1,0 +1,1818 @@
+(**********************************************************************
+ * CS51 Problem Set 5, 2016 - Moogle
+ * util.ml: an interface and the implementation of crawler services
+ *          needed to build the web index, including definitions of link
+ *          and page datatypes, a function for fetching a page given a 
+ *          link, and the values of the command line arguments (i.e. the
+ *          initial link, the number of pages to search, and the server
+ *          port.)
+ **********************************************************************)
+
+(* set this flag to true to make the crawler really talk to
+ * the internet.  Otherwise, it will treat the urls you give
+ * it as local file paths and ignore the host and port. *)
+let crawl_internet = false
+		       
+(* links are used to describe a web address *)
+type link = { host : string ;  (* e.g., "www.eecs.harvard.edu" *)
+              port : int ;     (* e.g., 80 *)
+              path : string    (* e.g., "/~greg/index.html" *)
+            } ;;
+  
+let string_of_link l =
+  if l.host = "" then "file://" ^ l.path
+  else if l.port = 80 then
+    l.host ^ ":" ^ l.path
+  else
+    l.host ^ ":" ^ (Bytes.create l.port) ^ l.path
+;;
+
+let link_compare (x:link) (y:link) : Order.ordering =
+  match Order.string_compare x.host y.host with
+  | Equal ->
+     (match Order.int_compare x.port y.port with
+      | Equal -> (match Order.string_compare x.path y.path with
+                  | Equal -> Equal
+                  | ans -> ans)
+      | ans -> ans)
+  | ans -> ans
+;;
+
+(* pages are used to describe the contents of web pages *)
+type page = { url : link ;
+              links : link list ;
+              words : string list
+            }
+
+let string_of_page p =
+  (* truncate a string to at most 100 characters *)
+  let trunc s =
+    if String.length s > 100 then
+      (String.sub s 0 100) ^ "..."
+    else s in
+  (* concatenate the links and truncate them *)
+  let ls = trunc (String.concat ";"
+				(List.map string_of_link p.links)) in
+  (* concatenate the words and truncate them *)
+  let ws = trunc (String.concat ";" p.words) in
+  "page(" ^ (string_of_link p.url) ^
+    "; Links: " ^ ls ^ "; Words: " ^ ws ^ ")"
+
+(* parse a url, breaking it into a host, port number (default 80) and
+ * path (default "") using a regular expression.
+ *)
+let http_re =
+  Str.regexp "http://\\([^/:]*\\)\\(:\\([0-9]+\\)\\)?\\(/\\([^#]*\\)\\)?"
+
+let parse_url url =
+  if Str.string_match http_re url 0 then
+    let host = Str.matched_group 1 url in
+    let port =
+      try int_of_string(Str.matched_group 3 url) with Not_found -> 80 in
+    let init_path = try Str.matched_group 5 url with Not_found -> "" in
+    let path = "/" ^ init_path in
+    {host = host; port = port; path = path}
+  else raise Not_found
+
+(* The response from the web-server will have a bunch of headers
+ * on it separated from the actual data by two newlines (or two
+ * carriage-returns/line-feeds.)  This finds those two spaces and
+ * strips off all the headers. *)
+let strip_headers page =
+  let rec find_two_newlines i =
+    if i+2 < String.length page then
+      match String.sub page i 2 with
+      | "\n\n" -> Some (i+2)
+      | "\r\n" ->
+         if i+4 < String.length page then
+           (match String.sub page (i+2) 2 with
+            | "\r\n" -> Some (i+4)
+            | _ -> find_two_newlines (i+1))
+         else None
+      | _ -> find_two_newlines (i+1)
+    else None
+  in
+  match find_two_newlines 0 with
+  | None -> page
+  | Some i -> String.sub page i (String.length page - i)
+
+
+let buf_len = 4096 ;;
+let buf = Bytes.create buf_len ;;  (* yuck, not thread safe *)
+
+let rec receive_message fd contents =
+  let len = Unix.recv fd buf 0 buf_len [] in
+  if len = 0 then String.concat "" (List.rev contents)
+  else receive_message fd ((String.sub buf 0 len)::contents)
+;;
+
+(* inet_fetch_url "www.seas.harvard.edu" 80 "/foo.html" should
+ * return as a string the message response from the web server
+ * www.seas.harvard.edu:80 for path "/foo.html".  This is using
+ * the more expensive HTTP 1.0 style protocol where a socket is
+ * opened and closed for each request.
+ *)
+let inet_fetch_url link : string option =
+  let host_addr =
+    try Unix.inet_addr_of_string link.host
+    with Failure _ ->
+      (Unix.gethostbyname link.host).Unix.h_addr_list.(0) in
+  let fd = Unix.socket Unix.PF_INET Unix.SOCK_STREAM 0 in
+  let _ = Unix.connect fd (Unix.ADDR_INET (host_addr,link.port)) in
+  let msg =
+    "GET "^link.path^" HTTP/1.1\r\nHost: "^link.host^":"^
+      (Bytes.create link.port)^"Connection: close\r\n\r\n" in
+  let i = Unix.send fd msg 0 (String.length msg) [] in
+  if i = -1 then raise (Failure "Unix.send failed") else
+    let result = receive_message fd [] in
+    Unix.close fd ; Some (strip_headers result)
+
+(* file_fetch_url "www.seas.harvard.edu" 80 "/foo.html" should
+ * return as a string the contents of the file in
+ * "/foo.html".  *)
+let buf_len = 4096 ;;
+let buf = Bytes.create buf_len ;;  (* yuck, not thread safe *)
+
+let file_fetch_url link : string option =
+  let chan = open_in link.path in
+  let rec receive_message chan contents =
+    let len = input chan buf 0 buf_len in
+    if len = 0 then String.concat "" (List.rev contents)
+    else receive_message chan ((String.sub buf 0 len)::contents) in
+  let result = receive_message chan [] in
+  close_in chan ; Some result
+
+(* we return a blank page unless the link is a txt, text, htm, html,
+ * ml, or mli file *)
+let valid_suffixes =
+  [ ""; ".html"; ".html"; ".txt"; ".text"; ".ml"; ".mli" ]
+
+let fetch_url link : string option =
+  try
+    if (List.exists (Filename.check_suffix link.path) valid_suffixes) then
+      if crawl_internet then inet_fetch_url link
+      else file_fetch_url link
+    else None
+  with _ -> None
+
+let href_re = Str.regexp_case_fold "href *= *\"\\([^#\"]*\\)[^\"]*\"" ;;
+let absolute_path_re = Str.regexp "/[.]*" ;;
+let javascript_re = Str.regexp "javascript:[.]*" ;;
+let parent_path_re = Str.regexp "\\.\\./.*" ;;
+
+(* Convert an href from the page into a link -- if the href
+ * starts with "http" then parse it to get the host, port, and
+ * path.  Otherwise, we assume it's on this host.  If there's
+ * no leading "/" on the href, we prepend the source_link's
+ * path.  I've filtered out the javascript links -- we may need to
+ * filter out other links as well...
+ *)
+let link_of_string source_link link_string =
+  try Some (parse_url link_string)
+  with Not_found ->
+    if Str.string_match absolute_path_re link_string 0 then
+      Some {host=source_link.host;
+            port=source_link.port; path=link_string}
+    else if Str.string_match javascript_re link_string 0 then
+      None
+    else
+      (* need to watch out for "../path" -- should probably also
+       * watch out for ./path. *)
+      let rec glue_paths p s =
+        if Str.string_match parent_path_re s 0 then
+          glue_paths (Filename.dirname p)
+                     (String.sub s 3 (String.length s - 3))
+        else p ^ "/" ^ s in
+      let new_path =
+        glue_paths (Filename.dirname source_link.path) link_string in
+      Some {host=source_link.host; port=source_link.port;
+            path=new_path}
+
+(* get_links page returns a list of URLs as links that occurred within
+ * href's on the page.
+ *)
+let get_links source_link page =
+  let rec loop pos links =
+    try
+      let _ = Str.search_forward href_re page pos in
+      let link_string = Str.matched_group 1 page in
+      let newpos = Str.match_end() in
+      match link_of_string source_link link_string with
+      | None -> loop newpos links
+      | Some l -> loop newpos (l::links)
+    with
+      Not_found -> List.rev links
+  in
+  loop 0 []
+
+(* get_words returns a list of words that occur on the page.
+ * For our purposes, words only contain alphabetic characters.
+ * If we try to use regexps here, we'll get a stack overflow,
+ * so this is coded by hand.
+ *)
+let get_words page =
+  let len = String.length page in
+  let rec loop pos words =
+    let rec find_end i =
+      if i < len then
+        let c = String.get page (pos+i) in
+        if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') then
+          find_end (i+1)
+        else i
+      else 0 in
+    if pos < len then
+      let e = find_end 0 in
+      if e = 0 then loop (pos+1) words else
+        loop (pos+e) ((String.sub page pos e)::words)
+    else words
+  in loop 0 []
+
+let get_page link =
+  match fetch_url link with
+    None -> None
+  | Some page ->
+     let links = get_links link page in
+     let words = get_words page in
+     Some {url = link ; links = links ; words = words}
+
+(* Read the command line arguments and return the
+ * port number which Moogle should use for serving,
+ * the number of pages to index, and the root url. *)
+let (server_port, num_pages_to_search, root_url) =
+  let args = Sys.argv in
+  try
+    let port = int_of_string(Array.get args 1) in
+    let num = int_of_string(Array.get args 2) in
+    let root_url = Array.get args 3 in
+    (port, num, root_url)
+  with
+    _ -> (* (Printf.printf
+                      "usage: %s <port> <num-pages> <root-url>\n"
+                      (Array.get args 0) ;
+                    exit 1) *)
+    (* hacky solution to get around arguments *)
+    let port = 8080 in
+    let num = 7 in
+    let root_url = "simple-html/index.html" in
+    (port, num, root_url)
+
+let initial_link =
+  try parse_url root_url
+  with Not_found ->
+       match link_of_string {host=""; port=80; path=""} root_url with
+       | None ->
+          (Printf.printf
+             "Please specify a url or path to a starting file\n" ;
+           exit 1)
+       | Some l -> l ;;
+
+let root_dir =
+  if initial_link.host = ""
+  then Filename.dirname initial_link.path
+  else "" ;;
+
+(* Return a link that should work in an href.
+ * If the link is a file in the root_dir, return just the
+ * relative path.  *)
+let href_of_link l =
+  let suffix str start =
+    let len = String.length str in
+    String.sub str start (len - start)
+  in
+  if l.host = "" then
+    let root_regexp = Str.regexp_string root_dir in
+    if Str.string_partial_match root_regexp l.path 0
+    then suffix l.path (Str.match_end ())
+    else "file://" ^ l.path
+  else if l.port = 80 then
+    l.host ^ ":" ^ l.path
+  else
+    l.host ^ ":" ^ (Bytes.create l.port) ^ l.path ;;
+
+
+
+
+
+(**********************************************************************
+ * CS51 Problem Set 5, 2016 - Moogle
+ * util.ml: an interface and the implementation of crawler services
+ *          needed to build the web index, including definitions of link
+ *          and page datatypes, a function for fetching a page given a 
+ *          link, and the values of the command line arguments (i.e. the
+ *          initial link, the number of pages to search, and the server
+ *          port.)
+ **********************************************************************)
+
+
+open Order ;;
+  
+(*************************************************************)
+(* signature for the services we provide for the crawler     *)
+(*************************************************************)
+
+(* links are used to describe a web address *)
+type link = { host : string ;  (* e.g., "www.eecs.harvard.edu" *)
+              port : int ;     (* e.g., 80 *)
+              path : string    (* e.g., "/~greg/index.html" *)
+            }
+        
+val string_of_link : link -> string
+val href_of_link: link -> string
+val link_compare : link -> link -> ordering
+             
+(* pages are used to describe the contents of web pages *)
+type page = { url : link ;          (* see above *)
+              links : link list ;   (* all of the links on the page *)
+              words : string list   (* all of the words on the page *)
+            }
+val string_of_page : page -> string
+(* given the link, returns the page -- should specify what
+ * exceptions get raised. *)
+val get_page : link -> page option
+          
+(* the initial link to be used by the crawler *)
+val initial_link : link
+(* The root directory of the server. "" if crawling the web,
+    (dirname initial_link) otherwise *)
+val root_dir : string
+(* the number of (distinct) pages the crawler should process *)
+val num_pages_to_search : int
+(* the port on which to listen for query requests *)
+val server_port : int
+
+
+
+
+
+(**********************************************************************
+ * CS51 Problem Set 5, 2016 - Moogle
+ * crawl.ml: the crawler, which builds a dictionary from words to sets
+ *           of links
+ **********************************************************************)
+
+(* Rename modules for convenience *)
+module CS = Crawler_services ;;
+module PR = Pagerank ;; 
+
+(* Specify the web page ranking method to be used. If you do the
+   Challenge section 6, you'll want to modify this. *)
+module MoogleRanker
+  = PR.InDegreeRanker (PR.PageGraph) (PR.PageScore)
+  (*
+     = PR.RandomWalkRanker (PR.PageGraph) (PR.PageScore) (struct
+         let do_random_jumps = Some 0.20
+         let num_steps = 1000
+       end)
+  *)
+
+  (*
+     = PR.QuantumRanker (PR.PageGraph) (PR.PageScore) (struct
+         let alpha = 0.01
+         let num_steps = 1
+         let debug = true
+       end) 
+  *)
+
+(* Dictionaries mapping words (strings) to sets of crawler links *)
+module WordDict = Dict.Make(
+  struct
+    type key = string
+    type value = PR.LinkSet.set
+    let compare = Order.string_compare
+    let string_of_key = (fun s -> s)
+    let string_of_value = PR.LinkSet.string_of_set
+
+    (* These functions are for testing purposes *)
+    let gen_key () = ""
+    let gen_key_gt _ () = gen_key ()
+    let gen_key_lt _ () = gen_key ()
+    let gen_key_random () = gen_key ()
+    let gen_key_between _ _ () = None
+    let gen_value () = PR.LinkSet.empty
+    let gen_pair () = (gen_key(),gen_value())
+  end)
+
+(* A query module that uses LinkSet and WordDict *)
+module Q = Query.Query(
+  struct
+    module S = PR.LinkSet
+    module D = WordDict
+  end)
+
+(***********************************************************************)
+(*    Section 1: CRAWLER                                               *)
+(***********************************************************************)
+
+(* TODO: Replace the implementation of the crawl function (currently
+   just a stub returning the empty dictionary) with a proper index of
+   crawled pages. Build an index as follows:
+ 
+   Remove a link from the frontier (the set of links that have yet to
+   be visited), visit this link, add its outgoing links to the
+   frontier, and update the index so that all words on this page are
+   mapped to linksets containing this url.
+ 
+   Keep crawling until we've reached the maximum number of links (n) or
+   the frontier is empty. 
+ *)
+
+let rec crawl (n:int)
+    (frontier: PR.LinkSet.set)
+    (visited : PR.LinkSet.set)
+    (d:WordDict.dict) : WordDict.dict =
+    (*first make sure the number or the frontier isn't empty*)
+    if n = 0 then d 
+    else
+    match (PR.LinkSet.choose frontier) with
+      | None -> d
+      | Some (lnk, _ ) -> 
+        
+        (* if i have visited the link before, 
+        remove it from the frontier and move on *)
+        if (PR.LinkSet.member visited lnk) then 
+          crawl (n) (PR.LinkSet.remove lnk frontier) visited d 
+        
+        else
+          
+          (* since we need the info on the link, 
+          change it to a page, in which we can extract data from *)
+          (match (CS.get_page lnk) with
+            
+            (* not convertible? remove and insert accordingly and move on *)
+            | None -> crawl (n) (PR.LinkSet.remove lnk frontier)
+             (PR.LinkSet.insert lnk visited) d
+
+            (* convertible to page? make the actual dictionary *)
+            | Some page -> 
+              (crawl 
+              (n-1) 
+              (  List.fold_left (fun x y -> PR.LinkSet.insert y x) 
+                 (PR.LinkSet.remove lnk frontier) page.links  )
+                
+                (PR.LinkSet.insert lnk visited)
+                
+                ( List.fold_left (fun dict word -> 
+                  match WordDict.lookup dict word with
+                    | Some x -> WordDict.insert dict word 
+                                (PR.LinkSet.insert page.url x)
+                    | None -> WordDict.insert dict word 
+                              (PR.LinkSet.singleton page.url))
+                              d page.words  )))
+;;
+
+let crawler () =
+  crawl CS.num_pages_to_search
+  (PR.LinkSet.singleton CS.initial_link)
+  PR.LinkSet.empty
+  WordDict.empty ;;
+
+
+
+(* Debugging note: if you set debug=true in moogle.ml, it will print
+   out your index after crawling. *)
+
+  
+(* If you want to test your crawler,
+ * uncomment the following tests and run them. *)
+
+
+let crawler_tests () = 
+  let link_present crawler key link = 
+    match WordDict.lookup crawler key with
+    | Some v -> PR.LinkSet.member v {host = ""; port = 80; path = link}
+    | _ -> false in 
+  let i = crawler () in 
+  (link_present i "DOCTYPE" "./simple-html/cow.html") 
+  && (link_present i "DOCTYPE" "./simple-html/index.html") 
+  && (link_present i "DOCTYPE" "./simple-html/moo.html") 
+  && (link_present i "DOCTYPE" "./simple-html/ocaml.html") 
+  && (link_present i "DOCTYPE" "./simple-html/functor.html") 
+  && (link_present i "DOCTYPE" "./simple-html/42.html") 
+  && (link_present i "DOCTYPE" "./simple-html/abstraction.html") 
+  && not (link_present i "universe" "./simple-html/cow.html") 
+  && not (link_present i "universe" "./simple-html/index.html") 
+  && not (link_present i "universe" "./simple-html/moo.html") 
+  && not (link_present i "universe" "./simple-html/ocaml.html") 
+  && not (link_present i "universe" "./simple-html/functor.html") 
+  && not (link_present i "universe" "./simple-html/abstraction.html") 
+  && (link_present i "universe" "./simple-html/42.html") ;;
+crawler_tests () ;;
+
+
+
+
+
+
+
+(**********************************************************************
+ * CS51 Problem Set 5, 2016 - Moogle
+ * dict.ml: an interface and simple implementations of a dictionary 
+ *          abstract datatype.
+ **********************************************************************)
+
+open Order ;;
+
+(* Interfaces and implementations of dictionaries.  A dictionary
+ * is used to associate a value with a key.  In our case, we will
+ * be using a dictionary to build an index for the web, associating
+ * a set of URLs with each word that we find as we crawl the web.
+ *)
+module type DICT =
+sig
+  type key
+  type value
+  type dict
+
+  (* An empty dictionary *)
+  val empty : dict
+
+  (* Folds the dictionary using the provided function f and base
+   * case u using the calling convention of fold_left: 
+   *
+   *    foldl f u dict
+   *
+   * The fold function f must have the type:
+   *      key -> value -> 'a -> 'a
+   * and the base case u has type 'a.
+   *
+   * If the dictionary has the (key,value) pairs (in any order)
+   *      (k1,v1), (k2,v2), (k3,v3), ... (kn,vn)
+   * then fold f d u should return:
+   *      f (f (... ((f(u k1 v1) k2 v2) k3 v3) ... kn vn)
+   *)
+  val foldl : ('a -> key -> value -> 'a) -> 'a -> dict -> 'a
+
+  (* Returns as an option the value associated with the provided key. If
+   * the key is not in the dictionary, return None. *)
+  val lookup : dict -> key -> value option
+
+  (* Returns true if and only if the key is in the dictionary. *)
+  val member : dict -> key -> bool
+
+  (* Inserts a (key,value) pair into our dictionary. If the key is already
+   * in our dictionary, update the key to have the new value. *)
+  val insert : dict -> key -> value -> dict
+
+  (* Removes the given key from the dictionary. If the key is not present,
+   * return the original dictionary. *)
+  val remove : dict -> key -> dict
+
+  (* Return an arbitrary key, value pair along with a new dict with that
+   * pair removed. Return None if the input dict is empty *)
+  val choose : dict -> (key * value * dict) option
+
+  (* functions to convert our types to strings for debugging and logging *)
+  val string_of_key: key -> string
+  val string_of_value : value -> string
+  val string_of_dict : dict -> string
+
+  (* various testing functions! *)
+  val test_insert : unit -> bool
+  val test_remove : unit -> bool
+  val test_choose : unit -> bool
+  val test_foldl : unit -> bool
+
+  (* Runs all the tests. see TESTING EXPLANATION below *)
+  val run_tests : unit -> bool
+end
+
+
+
+(* Argument module signature to our DICT functors *)
+module type DICT_ARG =
+  sig
+    type key
+    type value
+    val compare : key -> key -> ordering
+    val string_of_key : key -> string
+    val string_of_value : value -> string
+             
+    (* Use these functions for testing. See TESTING EXPLANATION. *)
+             
+    (* Generate a key. The same key is always returned *)
+    val gen_key : unit -> key
+          
+    (* Generate a random key. *)
+    val gen_key_random : unit -> key
+           
+    (* Generates a key greater than the argument. *)
+    val gen_key_gt : key -> unit -> key
+              
+    (* Generates a key less than the argument. *)
+    val gen_key_lt : key -> unit -> key
+              
+    (* Generates a key between the two arguments. Return None if no such
+     * key exists. *)
+    val gen_key_between : key -> key -> unit -> key option
+                
+    (* Generates a random value. *)
+    val gen_value : unit -> value
+            
+    (* Generates a random (key,value) pair *)
+    val gen_pair : unit -> key * value
+  end
+    
+    
+
+(* An example implementation of our DICT_ARG signature. Use this struct
+ * for testing. *)
+module IntStringDictArg : (DICT_ARG with type key = int
+        and type value = string) =
+  struct
+    type key = int
+    type value = string
+    let compare x y = if x < y then Less else if x > y then Greater else Equal
+    let string_of_key = string_of_int
+    let string_of_value v = v
+    let gen_key () = 0
+    let gen_key_gt x () = x + 1
+    let gen_key_lt x () = x - 1
+    let gen_key_between x y () =
+      let (lower, higher) = (min x y, max x y) in
+      if higher - lower < 2 then None else Some (higher - 1)
+    let gen_key_random =
+      let _ = Random.self_init () in
+      (fun () -> Random.int 10000)
+  
+    (* returns the nth string in lst, or "cow" n > length of list *)
+    let rec lst_n (lst: string list) (n: int) : string =
+      match lst with
+      | [] -> "cow"
+      | hd::tl -> if n = 0 then hd else lst_n tl (n-1)
+                
+    (* list of possible values to generate *)
+    let possible_values = ["a";"c";"d";"e";"f";"g";"h";"i";"j";"k";"m";"n";
+                           "o";"p";"q";"r";"s";"t";"u";"v";"w";"x";"y";"z";
+                           "zzzzzz";"cheese";"foo";"bar";"baz";"quux";"42"]
+    let num_values = List.length possible_values
+    (* gen_value will return the string at this current index *)
+    let current_index = ref 0
+    let gen_value () =
+      let index = !current_index in
+      if index >= num_values then
+  (current_index := 0; lst_n possible_values index)
+      else
+  (current_index := index + 1; lst_n possible_values index)
+    let gen_pair () = (gen_key_random(), gen_value())
+  end
+    
+    
+(* An association list implementation of our DICT signature. *)
+module AssocListDict(D:DICT_ARG) : (DICT with type key = D.key
+            and type value = D.value) =
+struct
+  type key = D.key;;
+  type value = D.value;;
+  type dict = (key * value) list;;
+
+  (* INVARIANT: sorted by key, no duplicates *)
+
+  let empty = [] ;;
+
+  let foldl f u d =
+    List.fold_left (fun a (k,v) -> f a k v) u d
+
+  let rec lookup d k =
+    match d with
+      | [] -> None
+      | (k1,v1)::d1 ->
+        (match D.compare k k1 with
+          | Equal -> Some v1
+          | Greater -> lookup d1 k
+          | _ -> None)
+
+  let member d k =
+    match lookup d k with
+      | None -> false
+      | Some _ -> true
+
+  let rec insert d k v =
+    match d with
+      | [] -> [(k,v)]
+      | (k1,v1)::d1 ->
+        (match D.compare k k1 with
+          | Less -> (k,v)::d
+          | Equal -> (k,v)::d1
+          | Greater -> (k1,v1)::(insert d1 k v))
+
+  let rec remove d k =
+    match d with
+      | [] -> []
+      | (k1,v1)::d1 ->
+  (match D.compare k k1 with
+          | Equal -> d1
+          | Greater -> (k1,v1)::(remove d1 k)
+          | _ -> d)
+
+  let choose d =
+    match d with
+      | [] -> None
+      | (k,v)::rest -> Some(k,v,rest)
+
+  let string_of_key = D.string_of_key
+  let string_of_value = D.string_of_value
+  let string_of_dict (d: dict) : string =
+    let f = (fun y (k,v) -> y ^ "\n key: " ^ D.string_of_key k ^
+      "; value: (" ^ D.string_of_value v ^ ")") in
+    List.fold_left f "" d
+
+  (****************************************************************)
+  (* Tests for our AssocListDict functor                          *)
+  (* These are just examples of tests, your tests should be a lot *)
+  (* more thorough than these.                                    *)
+  (****************************************************************)
+
+  (* adds a list of (key,value) pairs in left-to-right order *)
+  let insert_list (d: dict) (lst: (key * value) list) : dict =
+    List.fold_left (fun r (k,v) -> insert r k v) d lst
+
+  (* adds a list of (key,value) pairs in right-to-left order *)
+  let insert_list_reversed (d: dict) (lst: (key * value) list) : dict =
+    List.fold_right (fun (k,v) r -> insert r k v) lst d
+
+  (* generates a (key,value) list with n distinct keys in increasing order *)
+  let generate_pair_list (size: int) : (key * value) list =
+    let rec helper (size: int) (current: key) : (key * value) list =
+      if size <= 0 then []
+      else
+        let new_current = D.gen_key_gt current () in
+        (new_current, D.gen_value()) :: (helper (size - 1) new_current)
+    in
+    helper size (D.gen_key ())
+
+  (* generates a (key,value) list with keys in random order *)
+  let rec generate_random_list (size: int) : (key * value) list =
+    if size <= 0 then []
+    else
+      (D.gen_key_random(), D.gen_value()) :: (generate_random_list (size - 1))
+
+  let test_insert () =
+    let pairs1 = generate_pair_list 26 in
+    let d1 = insert_list empty pairs1 in
+    List.fold_left (fun hd (k,v) -> hd && (lookup d1 k = Some v)) true pairs1
+
+  let test_remove () =
+    let pairs1 = generate_pair_list 26 in
+    let d1 = insert_list empty pairs1 in
+    List.fold_left
+      (fun hd (k,_) ->
+        let r = remove d1 k in
+        List.fold_left
+          (fun _hd2 (k2,v2) ->
+            if k = k2 then hd && (lookup r k2 = None)
+            else hd && (lookup r k2 = Some v2)
+          ) true pairs1
+      ) true pairs1
+
+
+  let test_lookup () =
+    true
+
+  let test_choose () =
+    true
+
+  let test_member () =
+    true
+
+  let test_foldl () =
+    true
+
+  let run_tests () =
+    test_insert() &&
+    test_remove() &&
+    test_lookup() &&
+    test_choose() &&
+    test_member() &&
+    test_foldl()
+
+end
+
+
+(* A binary search tree implementation of our DICT signature. This
+   implementation doesn't maintain balance in the trees. *)
+module BSTDict(D:DICT_ARG) : (DICT with type key = D.key
+            and type value = D.value) =
+struct
+  type key = D.key;;
+  type value = D.value;;
+  type dict =
+    | E
+    | T of dict * (key * value) * dict ;;
+
+  (* INVARIANT: keys in left dict are all less than key; keys in right
+     dict are all greater than key; no duplicate keys *)
+
+  let empty = E ;;
+
+  let rec foldl f u d =
+    match d with
+    | E -> u
+    | T(dl, (k,v), dr) ->
+       f (foldl f (foldl f u dl) dr) k v ;;
+
+  let rec lookup d k =
+    match d with
+      | E -> None
+      | T(dl, (k1, v1), dr) ->
+        match D.compare k k1 with
+        | Equal -> Some v1
+        | Less -> lookup dl k
+        | Greater -> lookup dr k
+
+  let member d k =
+    match lookup d k with
+      | None -> false
+      | Some _ -> true
+
+  let rec insert d k v =
+    match d with
+      | E -> T(E, (k,v), E)
+      | T(dl, ((k1, _v1) as kv), dr) ->
+         (match D.compare k k1 with
+          | Equal -> T(dl, (k,v), dr)
+          | Less -> T(insert dl k v, kv, dr)
+          | Greater -> T(dl, kv, insert dr k v))
+
+  let rec max d =
+    match d with
+    | E -> None
+    | T(_dl, _kv, dr) ->
+       match dr with
+       | E -> Some d
+       | _ -> max dr
+
+  exception Dict_internal_error
+        
+  let rec remove d k =
+    match d with
+    | E -> E
+    | T(dl, ((k1, _v1) as kv), dr) ->
+       match D.compare k k1 with
+       | Less -> T((remove dl k), kv, dr)
+       | Greater -> T(dl, kv, (remove dr k))
+       | Equal ->
+    match dl, dr with
+    | E, E -> E
+    | dl, E -> dl
+    | E, dr -> dr
+    | _dl, _dr ->
+       match max dl with
+       | None -> raise Dict_internal_error
+       | Some E -> raise Dict_internal_error
+       | Some T(_, ((km, _vm) as kvm), _) ->
+    T((remove dl km), kvm, dr)
+    
+  let choose d =
+    match d with
+      | E -> None
+      | T(_dl, (k,v), _dr) ->
+   Some (k, v, (remove d k))
+
+  let string_of_key = D.string_of_key
+  let string_of_value = D.string_of_value
+  let string_of_dict (d: dict) : string =
+    let f = (fun str k v ->
+       "key: "
+       ^ D.string_of_key k
+       ^ "; value: ("
+       ^ D.string_of_value v
+       ^ ")\n"
+       ^ str ) in
+    foldl f "end\n" d
+
+  (****************************************************************)
+  (* Tests for the functor                                        *)
+  (* These are just examples of tests, your tests should be a lot *)
+  (* more thorough than these.                                    *)
+  (****************************************************************)
+
+  (* adds a list of (key,value) pairs in left-to-right order *)
+  let insert_list (d: dict) (lst: (key * value) list) : dict =
+    List.fold_left (fun r (k,v) -> insert r k v) d lst
+
+  (* adds a list of (key,value) pairs in right-to-left order *)
+  let insert_list_reversed (d: dict) (lst: (key * value) list) : dict =
+    List.fold_right (fun (k,v) r -> insert r k v) lst d
+
+  (* generates a (key,value) list with n distinct keys in increasing order *)
+  let generate_pair_list (size: int) : (key * value) list =
+    let rec helper (size: int) (current: key) : (key * value) list =
+      if size <= 0 then []
+      else
+        let new_current = D.gen_key_gt current () in
+        (new_current, D.gen_value()) :: (helper (size - 1) new_current)
+    in
+    helper size (D.gen_key ())
+
+  (* generates a (key,value) list with keys in random order *)
+  let rec generate_random_list (size: int) : (key * value) list =
+    if size <= 0 then []
+    else
+      (D.gen_key_random(), D.gen_value()) :: (generate_random_list (size - 1))
+
+  let test_insert () =
+    let pairs1 = generate_pair_list 26 in
+    let d1 = insert_list empty pairs1 in
+    List.fold_left (fun hd (k,v) -> hd && (lookup d1 k = Some v)) true pairs1
+
+  let test_remove () =
+    let pairs1 = generate_pair_list 26 in
+    let d1 = insert_list empty pairs1 in
+    List.fold_left
+      (fun hd (k,_) ->
+        let r = remove d1 k in
+        List.fold_left
+          (fun _hd2 (k2,v2) ->
+            if k = k2 then hd && (lookup r k2 = None)
+            else hd && (lookup r k2 = Some v2)
+          ) true pairs1
+      ) true pairs1
+
+
+  let test_lookup () =
+    true
+
+  let test_choose () =
+    true
+
+  let test_member () =
+    true
+
+  let test_foldl () =
+    true
+
+  let run_tests () =
+    test_insert() &&
+    test_remove() &&
+    test_lookup() &&
+    test_choose() &&
+    test_member() &&
+    test_foldl()
+
+end
+
+
+(******************************************************************)
+(* Run our tests.                                                 *)
+(******************************************************************)
+
+(* Create a dictionary mapping ints to strings using our
+ * AssocListDict functor and run the tests *)
+module IntStringListDict = AssocListDict(IntStringDictArg) ;;
+IntStringListDict.run_tests();;
+
+(******************************************************************)
+(* Make: a functor that creates a DICT by calling our             *)
+(* AssocListDict functors                               *)
+(******************************************************************)
+module Make (D:DICT_ARG) : (DICT with type key = D.key
+          with type value = D.value) =
+  (* AssocListDict(D) *)
+  BSTDict(D)
+
+
+
+
+
+(**********************************************************************
+ * CS51 Problem Set 5, 2016 - Moogle
+ * graph.ml: definitions for a graph abstract data type, including a 
+ *           graph signature, a node signature, and a functor for 
+ *           building graphs from a node module
+ **********************************************************************)
+
+open Order
+
+module type NODE =
+sig
+  type node
+
+  (* Require that nodes be comparable for efficiency. *)
+  val compare : node -> node -> ordering
+  val string_of_node : node -> string
+  val gen : unit -> node
+end
+
+(* A signature for directed graphs with unweighted edges *)
+module type GRAPH =
+sig
+  module N : NODE
+  type node = N.node
+  type graph
+
+  val empty : graph
+
+  val nodes : graph -> node list
+
+  val is_empty : graph -> bool
+
+  val add_node : graph -> node -> graph
+
+  (* Adds the nodes if they aren't already present. *)
+  val add_edge : graph -> node -> node -> graph
+
+  (* Return None if node isn't in the graph *)
+  val neighbors : graph -> node -> node list option
+
+  (* Return None if node isn't in the graph *)
+  val outgoing_edges : graph -> node -> (node * node) list option
+
+  val has_node : graph -> node -> bool
+
+  (* Return None if the graph is empty *)
+  val get_random_node : graph -> node option
+
+  val string_of_graph : graph -> string
+end
+
+module Graph(NA: NODE) : (GRAPH with module N = NA) =
+struct
+  open Order;;
+  module N = NA
+  type node = N.node
+
+  (* We'll represent a graph as an edge dictionary:
+     dictionary: node -> neighbor set
+     Every node in the graph must be a key in the dictionary.
+  *)
+
+  module NeighborSet = Myset.Make(
+     struct
+        type t = node
+        let compare = N.compare
+        let string_of_t = N.string_of_node
+        let gen = N.gen
+        let gen_random = N.gen
+        let gen_gt _ () = N.gen ()
+        let gen_lt _ () = N.gen ()
+        let gen_between _ _ () = None
+      end)
+
+  module EdgeDict = Dict.Make(
+    struct
+      type key = node
+      type value = NeighborSet.set
+      let compare = N.compare
+      let string_of_key = N.string_of_node
+      let string_of_value ns = NeighborSet.string_of_set ns
+      let gen_key = N.gen
+      let gen_key_random = N.gen
+      let gen_key_gt _ () = N.gen ()
+      let gen_key_lt _ () = N.gen ()
+      let gen_key_between _ _ () = None
+      let gen_value () = NeighborSet.empty
+      let gen_pair () = (gen_key(),gen_value())
+    end)
+
+  module IntNode = Dict.Make(
+    struct
+      type key = int
+      type value = node
+      let compare = int_compare
+      let string_of_key = string_of_int
+      let string_of_value = N.string_of_node
+      let gen_key () = 0
+      let gen_key_random () = 0
+      let gen_key_gt _ () = 1
+      let gen_key_lt _ () = (-1)
+      let gen_key_between _ _ () = None
+      let gen_value = N.gen
+      let gen_pair () = (gen_key(),gen_value())
+    end)
+
+ type graph = { edges : EdgeDict.dict ;
+                num_nodes : int ;
+                index_to_node_map : IntNode.dict }
+
+ let empty : graph = { edges = EdgeDict.empty;
+                       num_nodes = 0;
+                       index_to_node_map = IntNode.empty }
+
+ let add_node g n =
+   if EdgeDict.member g.edges n then g
+   else
+     { edges = EdgeDict.insert g.edges n (NeighborSet.empty) ;
+       num_nodes = g.num_nodes + 1 ;
+       index_to_node_map =
+         IntNode.insert g.index_to_node_map g.num_nodes n }
+
+  let nodes g =
+    EdgeDict.foldl (fun r k _ -> k :: r) [] g.edges
+
+  let is_empty g = (g.num_nodes = 0)
+
+  (* Adds the nodes if they aren't already present. *)
+  let add_edge g src dst =
+    let new_neighbors = match EdgeDict.lookup g.edges src with
+      | None -> NeighborSet.insert dst NeighborSet.empty
+      | Some s -> NeighborSet.insert dst s
+    in
+      (* ensure both src and dst in the graph before adding edge *)
+    let g' = (add_node (add_node g src) dst) in
+      {edges = EdgeDict.insert g'.edges src new_neighbors;
+       num_nodes = g'.num_nodes;
+       index_to_node_map = g'.index_to_node_map}
+
+  let neighbors g n : node list option =
+    match EdgeDict.lookup g.edges n with
+      | None -> None
+      | Some s -> Some (NeighborSet.fold (fun r neigh -> neigh :: r) [] s)
+
+  let outgoing_edges g src : (node * node) list option =
+    match EdgeDict.lookup g.edges src with
+      | None -> None
+      | Some s -> Some (NeighborSet.fold (fun r dst ->
+                                             (src, dst) :: r) [] s)
+
+  let has_node g n =
+    match EdgeDict.lookup g.edges n with
+      | None -> false
+      | _ -> true
+
+  let get_random_node g =
+    if g.num_nodes = 0 then None else
+      let r = Random.int (g.num_nodes) in
+        IntNode.lookup g.index_to_node_map r
+
+  let string_of_graph g =
+    "Graph: " ^ (EdgeDict.string_of_dict g.edges)
+end
+
+module NamedGraph =
+struct
+  include(Graph(struct
+                  type node = string
+                  let compare = Order.string_compare
+                  let string_of_node = fun x -> x
+                  let gen () = ""
+                end))
+  let from_edges (es: (string * string) list) : graph =
+    List.fold_left (fun g (src, dst) -> add_edge g src dst) empty es
+end
+
+(* Wrap our tests in a module so that they don't pollute the namespace *)
+module TestGraph =
+struct
+  module G = NamedGraph
+
+  let g = G.add_edge G.empty "a" "b";;
+  let g2 = G.add_edge g "a" "c";;
+
+  let deopt_len lo =
+    match lo with
+      | None -> 0
+      | Some xs -> List.length xs;;
+
+  let deopt_lst lo =
+    match lo with
+      | None -> []
+      | Some xs -> xs;;
+
+  let deopt_node no =
+    match no with
+      | None -> "None"
+      | Some n -> n;;
+
+  let _ = (
+    assert (G.has_node g "a");
+    assert (G.has_node g "b");
+    assert (G.has_node g "c" = false);
+    assert (G.has_node g2 "c");
+    assert (G.has_node g2 "d" = false);
+
+    assert (List.length (G.nodes G.empty) = 0) ;
+    assert (List.length (G.nodes (G.add_node G.empty "a")) = 1) ;
+
+    assert (List.length (G.nodes g) = 2) ;
+
+    assert (List.length (G.nodes g2) = 3) ;
+
+    assert (deopt_len (G.outgoing_edges g2 "a") = 2) ;
+    assert (deopt_len (G.outgoing_edges g2 "b") = 0) ;
+    assert (deopt_len (G.outgoing_edges g2 "c") = 0) ;
+    assert (G.outgoing_edges g2 "d" = None) ;
+
+    assert (deopt_len (G.neighbors g2 "a") = 2) ;
+    assert (deopt_len (G.neighbors g2 "b") = 0) ;
+    assert (deopt_len (G.neighbors g2 "c") = 0) ;
+    assert (G.neighbors g2 "d" = None) ;
+
+    assert (let t = deopt_lst (G.neighbors g2 "a") in
+              t = ["b";"c"] || t = ["c";"b"]) )
+    (*  let _ = (List.fold_left (fun _ _ -> Printf.printf "%s\n"
+                             (deopt_node (G.get_random_node g2)))
+             () [1;1;1;1;1;1;1;1;1;1]) *)
+end
+
+
+
+
+
+(**********************************************************************
+ * CS51 Problem Set 5, 2016 - Moogle
+ * myset.ml: an interface and simple implementation of a set 
+ *           abstract datatype
+ **********************************************************************)
+
+open Order
+
+(* Definitions for sets. *)
+
+(* An interface for set modules *)
+module type SET =
+sig
+  type elt  (* type of elements in the set *)
+  type set  (* abstract type for the set *)
+
+  val empty : set
+
+  val is_empty : set -> bool
+
+  val insert : elt -> set -> set
+
+  (* same as insert x empty *)
+  val singleton : elt -> set
+
+  val union : set -> set -> set
+  val intersect : set -> set -> set
+
+  (* remove an element from the set -- if the
+   * element isn't present, does nothing. *)
+  val remove : elt -> set -> set
+
+  (* returns true iff the element is in the set *)
+  val member : set -> elt -> bool
+
+  (* chooses some member from the set, removes it
+   * and returns that element plus the new set.
+   * If the set is empty, returns None. *)
+  val choose : set -> (elt * set) option
+
+  (* fold a function across the elements of the set in some
+   * unspecified order, using the calling convention of fold_left, that
+   * is, if the set s contains s1,...,sn, then
+   *      fold f u s
+   * returns
+   *      (f ... (f (f u s1) s2) ... sn)
+  *)
+  val fold : ('a -> elt -> 'a) -> 'a -> set -> 'a
+
+  (* functions to convert the types to a string. useful for debugging. *)
+  val string_of_set : set -> string
+  val string_of_elt : elt -> string
+
+  (* runs the tests. See TESTING EXPLANATION *)
+  val run_tests : unit -> unit
+end
+
+(* Parameter to Set modules -- we must pass in some
+ * type for the elements of a set, a comparison
+ * function, and a way to stringify it.
+ *)
+module type COMPARABLE =
+sig
+  type t
+  val compare : t -> t -> ordering
+  val string_of_t : t -> string
+
+  (* The functions below are used for testing. See TESTING EXPLANATION *)
+
+  (* Generate a value of type t. The same t is always returned *)
+  val gen : unit -> t
+
+  (* Generate a random value of type t. *)
+  val gen_random : unit -> t
+
+  (* Generate a t greater than the argument. *)
+  val gen_gt : t -> unit -> t
+
+  (* Generate a t less than the argument. *)
+  val gen_lt : t -> unit -> t
+
+  (* Generate a t between the two arguments. Return None if no such
+   * t exists. *)
+  val gen_between : t -> t -> unit -> t option
+end
+
+(* An example implementation of the COMPARABLE signature. Use this
+ * struct for testing. *)
+module IntComparable : COMPARABLE =
+struct
+  type t = int
+  let compare x y = if x < y then Less else if x > y then Greater else Equal
+  let string_of_t = string_of_int
+  let gen () = 0
+  let gen_random =
+    let _ = Random.self_init () in
+    (fun () -> Random.int 10000)
+  let gen_gt x () = x + 1
+  let gen_lt x () = x - 1
+  let gen_between x y () =
+    let (lower, higher) = (min x y, max x y) in
+    if higher - lower < 2 then None else Some (higher - 1)
+end
+
+(* A simple, list-based implementation of sets. *)
+module ListSet(C: COMPARABLE) : (SET with type elt = C.t) =
+struct
+  type elt = C.t
+  type set = elt list
+
+  (* INVARIANT: sorted, no duplicates *)
+  let empty = []
+  let is_empty xs =
+    match xs with
+      | [] -> true
+      | _ -> false
+  let singleton x = [x]
+  let rec insert x xs =
+    match xs with
+      | [] -> [x]
+      | y::ys -> (match C.compare x y with
+          | Greater -> y::(insert x ys)
+          | Equal -> xs
+          | Less -> x::xs)
+
+  let union xs ys = List.fold_right insert xs ys
+  let rec remove y xs =
+    match xs with
+      | [] -> []
+      | x::xs1 -> (match C.compare y x with
+          | Equal -> xs1
+          | Less -> xs
+          | Greater -> x::(remove y xs1))
+
+  let rec intersect xs ys =
+    match xs, ys with
+      | [], _ -> []
+      | _, [] -> []
+      | xh::xt, yh::yt -> (match C.compare xh yh with
+          | Equal -> xh::(intersect xt yt)
+          | Less -> intersect xt ys
+          | Greater -> intersect xs yt)
+
+  let rec member xs x =
+    match xs with
+      | [] -> false
+      | y::ys -> (match C.compare x y with
+          | Equal -> true
+          | Greater -> member ys x
+          | Less -> false)
+
+  let choose xs =
+    match xs with
+      | [] -> None
+      | x::rest -> Some (x,rest)
+      
+  let fold = List.fold_left
+
+  let string_of_elt = C.string_of_t
+      
+  let string_of_set (s: set) : string =
+    let f = (fun y e -> y ^ "; " ^ C.string_of_t e) in
+    "set([" ^ (List.fold_left f "" s) ^ "])"
+
+
+  (****************************************************************)
+  (* Tests for the ListSet functor                                *)
+  (* These are just examples of tests, your tests should be a lot *)
+  (* more thorough than these.                                    *)
+  (****************************************************************)
+
+  (* adds a list of (key,value) pairs in left-to-right order *)
+  let insert_list (d: set) (lst: elt list) : set =
+    List.fold_left (fun r k -> insert k r) d lst
+
+  let rec generate_random_list (size: int) : elt list =
+    if size <= 0 then []
+    else (C.gen_random()) :: (generate_random_list (size - 1))
+
+  let test_insert () =
+    let elts = generate_random_list 100 in
+    let s1 = insert_list empty elts in
+    List.iter (fun k -> assert(member s1 k)) elts;
+    ()
+
+  let test_remove () =
+    let elts = generate_random_list 100 in
+    let s1 = insert_list empty elts in
+    let s2 = List.fold_right (fun k r -> remove k r) elts s1 in
+    List.iter (fun k -> assert(not (member s2 k))) elts;
+    ()
+
+  let test_union () =
+    ()
+
+  let test_intersect () =
+    ()
+
+  let test_member () =
+    ()
+
+  let test_choose () =
+    ()
+
+  let test_fold () =
+    ()
+
+  let test_is_empty () =
+    ()
+
+  let test_singleton () =
+    ()
+
+  let run_tests () =
+    test_insert () ;
+    test_remove () ;
+    test_union () ;
+    test_intersect () ;
+    test_member () ;
+    test_choose () ;
+    test_fold () ;
+    test_is_empty () ;
+    test_singleton () ;
+    ()
+
+end
+
+
+
+(***********************************************************************)
+(*       Section 2: Sets as dictionaries                     *)
+(***********************************************************************)
+
+(* TODO: Uncomment the skeleton code for the DictSet module below and
+   complete the implementation, making sure that it conforms to the
+   appropriate signature. 
+
+   Add appropriate tests for the functor and make sure that your 
+   implementation passes the tests. Once you have the DictSet functor 
+   working, you can use it instead of the ListSet implementation by 
+   updating the definition of the Make functor below. *)
+  
+(******************************************************************)
+(* DictSet: a functor that creates a SET by calling the           *)
+(* Dict.Make functor                                              *)
+(******************************************************************)
+
+module DictSet(C : COMPARABLE) : (SET with type elt = C.t) =
+struct
+  module D = Dict.Make(
+    struct
+      type key = C.t
+      type value = unit
+      let compare x y = C.compare x y
+      let string_of_key x = C.string_of_t x
+      let string_of_value () = "()"
+
+      let gen_key  = C.gen 
+      let gen_key_gt x = C.gen_gt x 
+      let gen_key_lt x  = C.gen_lt x 
+
+      let gen_key_random  = C.gen_random 
+      let gen_key_between x y  = C.gen_between x y 
+      let gen_value () = ()
+      let gen_pair () = (gen_key (), gen_value ())
+    end)
+
+  type elt = D.key
+  type set = D.dict
+  let empty = D.empty
+
+  let is_empty (s:set) : bool = (s = empty)
+
+  let insert (k:elt) (s:set) : set = D.insert s k ()
+
+  let singleton (k:elt): set = D.insert D.empty k ()
+
+  let rec union (x:set) (y:set) : set = 
+    match D.choose x with
+    | None -> y
+    | Some (k, (), xremoved) -> union xremoved (D.insert y k () )
+
+
+  let member (s:set) (k:elt) : bool = D.member s k
+
+  let remove (k:elt) (s:set) = D.remove s k
+
+  let rec intersect (x:set) (y:set) : set = 
+    match D.choose x with
+    | None -> empty
+    | Some (k, (), xremoved) -> 
+        if (member y k) then insert k (intersect xremoved y) 
+        else (intersect xremoved y)
+
+
+
+  let choose (s:set) : (elt*set) option = 
+    match D.choose s with
+    | None -> None
+    | Some (k, (), sremoved) -> Some (k,sremoved)
+
+
+
+  let fold f k s = D.foldl (fun d k _ -> f d k) k s
+
+
+  let string_of_elt = D.string_of_key
+  let string_of_set s = D.string_of_dict s
+
+  (****************************************************************)
+  (* Tests for the DictSet functor                                *)
+  (* Use the tests from the ListSet functor to see how you should *)
+  (* write tests. However, you must write a lot more              *)
+  (* comprehensive tests to test ALL your functions.              *)
+  (****************************************************************)
+
+  (* add your test functions to run_tests *)
+
+  let insert_list (d: set) (lst: elt list) : set =
+    List.fold_left (fun r k -> insert k r) d lst
+
+  let rec generate_random_list (size: int) : elt list =
+    if size <= 0 then []
+    else (C.gen_random()) :: (generate_random_list (size - 1))
+
+  let test_insert () =
+    let elts = generate_random_list 100 in
+    let s1 = insert_list empty elts in
+    List.iter (fun k -> assert(member s1 k)) elts;
+    ()
+
+  let test_remove () =
+    let elts = generate_random_list 100 in
+    let s1 = insert_list empty elts in
+    let s2 = List.fold_right (fun k r -> remove k r) elts s1 in
+    List.iter (fun k -> assert(not (member s2 k))) elts;
+    ()
+
+  let test_union () =
+    let elts = generate_random_list 100 in
+    let s1 = insert_list empty elts in
+    let elts2 = generate_random_list 100 in
+    let s2 = insert_list empty elts2 in
+    let uni_f = union s1 s2 in
+    List.iter2 
+      (fun a b -> assert((member uni_f a) && (member uni_f b))) elts elts2;
+    ()
+
+  let test_intersect () = 
+    let elt1 = C.gen_random() in
+    let elt2 = C.gen_gt elt1 () in
+    let elt3 = C.gen_gt elt2 () in
+    let s1 = empty in
+    let s2 = insert elt1 empty in
+    let s2 = insert elt2 s2 in 
+    let s3 = insert elt1 empty in
+    let s3 = insert elt3 s3 in
+    let int12 = intersect s1 s2 in
+    let int23 = intersect s2 s3 in
+    assert (not (member int12 elt1 || member int12 elt2 || member int12 elt3));
+    assert (member int23 elt1);
+    assert (not (member int23 elt2 || member int23 elt3));
+    () 
+
+  let test_member () =
+    let elt1 = C.gen_random () in
+    let elt2 = C.gen_gt elt1 () in
+    let elt3 = C.gen_gt elt2 () in
+    let s1 = insert elt1 empty in
+    let s1 = insert elt2 s1 in
+    assert (member s1 elt1 && member s1 elt2);
+    assert (not (member s1 elt3));
+    ()
+
+  let test_choose () = 
+    let elt1 = C.gen_random () in
+    let s0 = empty in
+    let s1 = insert elt1 empty in
+    assert (choose s0 = None);
+    match choose s1 with
+    | Some (k, d) ->
+      (assert (k = elt1 && d = empty));
+    | _ -> raise (Failure "test_choose failed");
+    ()
+
+  let test_fold () =
+    let elts = generate_random_list 100 in
+    let s1 = fold (fun st elt -> insert elt st) 
+              empty (insert_list empty elts) in
+    List.iter (fun k -> assert (member s1 k)) elts;
+    ()
+
+  let test_is_empty () =
+    assert (is_empty (empty));
+    ()
+
+  let test_singleton () =
+    let ran = C.gen () in
+    let sgtn = insert ran empty in
+    assert (member sgtn ran);
+    () 
+
+
+  let run_tests () =
+    test_insert () ;
+    test_remove () ;
+    test_union () ;
+    test_intersect () ;
+    test_member () ;
+    test_choose () ;
+    test_fold () ;
+    test_is_empty () ;
+    test_singleton () ;
+    ()
+
+
+end
+
+
+(******************************************************************)
+(* Run the tests.                                                 *)
+(******************************************************************)
+
+(* Create a set of ints using the ListSet functor. *)
+module IntListSet = ListSet(IntComparable) ;;
+IntListSet.run_tests();;
+  
+(***********************************************************************)
+(*    Section 3: Update set implementation and try your crawler        *)
+(***********************************************************************)
+
+module IntDictSet = DictSet(IntComparable) ;;
+IntDictSet.run_tests();;
+
+(******************************************************************)
+(* Make: a functor that creates a SET by calling the              *)
+(* ListSet or DictSet functors                                    *)
+(******************************************************************)
+module Make(C : COMPARABLE) : (SET with type elt = C.t) =
+  (* Change this line to use the dictionary implementation of sets 
+     when you are finished. *)
+  (* ListSet (C)  *)
+  DictSet (C)
+  
+
+
+
+
+
+  (**********************************************************************
+ * CS51 Problem Set 5, 2016 - Moogle
+ * nodescore.ml: definitions for node scores maps, which are used as 
+ *               part of the page-rank algorithm
+ **********************************************************************)
+
+open Order
+open Graph
+
+(* A NodeScore is a mapping from nodes to floating point scores.  It
+ * adds a bit to the functionality of a dictionary. In particular, it
+ * supports scaling and normalizing the score. *)
+module type NODE_SCORE =
+sig
+  module N : NODE
+  type node = N.node
+  type node_score_map
+  val empty : node_score_map
+  val scale : node_score_map -> float -> node_score_map
+
+  (* Scale the scores so that they add to 1.  If they originally add to zero,
+   * leaves them unchanged *)
+  val normalize : node_score_map -> node_score_map
+  val nodes : node_score_map -> node list
+  val get_score : node_score_map -> node -> float option
+
+  (* Replace the old score, if there is one *)
+  val set_score : node_score_map -> node -> float -> node_score_map
+
+  (* Add to the old score.  (Use zero if no old score) *)
+  val add_score : node_score_map -> node -> float -> node_score_map
+
+  (* Create a zero valued node_score_map *)
+  val zero_node_score_map : node list -> node_score_map
+
+  (* Create a node_score_map with fixed values for each node *)
+  val fixed_node_score_map : node list -> float -> node_score_map
+
+  val string_of_node_score_map : node_score_map -> string
+
+  (* Fold all the node/score pairs in a node_score_map, according to
+     the fold_left calling convention *)
+  val fold : ('b -> node -> float -> 'b) -> 'b -> node_score_map -> 'b
+end
+
+module NodeScore(NA: NODE) : (NODE_SCORE with module N = NA) =
+struct
+  module N = NA
+  type node = N.node
+
+  module D = Dict.Make(
+    struct
+      type key = node
+      type value = float
+      let compare = N.compare
+      let string_of_key = N.string_of_node
+      let string_of_value = string_of_float
+      let gen_key = N.gen
+      let gen_key_lt _ () = N.gen ()
+      let gen_key_gt _ () = N.gen ()
+      let gen_key_random = N.gen
+      let gen_key_between _ _ () = None
+      let gen_value () = 0.0
+      let gen_pair () = (gen_key(),gen_value())
+    end)
+
+  type node_score_map = D.dict
+  let empty = D.empty
+  let scale ns v =
+    D.foldl (fun r n s -> D.insert r n (v *. s)) D.empty ns
+  let sum ns =
+    D.foldl (fun r _ s -> s +. r) 0.0 ns
+
+  let normalize ns =
+    let s = sum ns in
+      if s = 0.0 then ns else scale ns (1.0 /. s)
+
+  let nodes ns =
+    D.foldl (fun r n _ -> n :: r) [] ns
+
+  let get_score ns n =
+    D.lookup ns n
+
+  let set_score ns n s =
+    D.insert ns n s
+
+  let add_score ns n s =
+    match get_score ns n with
+      | None -> set_score ns n s
+      | Some v -> set_score ns n (s +. v)
+
+  let string_of_node_score_map = D.string_of_dict
+
+  let fold = D.foldl
+
+  let fixed_node_score_map nodes v =
+    List.fold_left (fun r node -> set_score r node v) empty nodes
+
+  let zero_node_score_map nodes = fixed_node_score_map nodes 0.0
+end
+
+
+
+
+
+(**********************************************************************
+ * CS51 Problem Set 5, 2016 - Moogle
+ * query.ml:  a datatype for Moogle queries and a function for
+ *            evaluating a query, given a web index
+ **********************************************************************)
+
+module type QUERY_ARG =
+sig
+  module S : Myset.SET with type elt = Crawler_services.link
+  module D : Dict.DICT with type key = string
+                       with type value = S.set
+end
+
+module Query(A : QUERY_ARG) =
+struct
+  open A ;;
+
+  type query =
+      Word of string
+    | And of query * query
+    | Or of query * query
+
+  (* This is a hack -- we should probably do a proper job
+   * of parsing with parentheses. *)
+  let rec parse_words ws =
+    match ws with
+      | w::"AND"::rest -> And(Word w,parse_words rest)
+      | w::"OR"::rest -> Or(Word w,parse_words rest)
+      | w::[] -> Word w
+      | w::rest -> And(Word w,parse_words rest)
+      | [] -> raise (Failure "query not understood")
+
+  let query_re = Str.regexp "\\?q=\\(.*\\)"
+  let term_sep_re = Str.regexp "\\+"
+
+  let parse_query s =
+    if Str.string_match query_re s 0 then
+      let qs = Str.matched_group 1 s in
+      let words = Str.split term_sep_re qs
+      in
+        parse_words words
+    else raise (Failure "query not understood")
+
+  (* Evaluate a query given an index *)
+  let rec eval_query (idx : D.dict) (q:query) : S.set =
+    match q with
+      | And (l, r) -> S.intersect (eval_query idx l) (eval_query idx r)
+      | Or (l, r) -> S.union (eval_query idx l) (eval_query idx r)
+      | Word s ->
+  match D.lookup idx s with
+    | None -> S.empty
+    | Some s -> s
+
+end
