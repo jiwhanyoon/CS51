@@ -1,0 +1,53 @@
+### Starting build.
+# Target: miniml.ml.depends, tags: { extension:ml, file:miniml.ml, ocaml, ocamldep, quiet, strict-sequence, thread, traverse, use_graphics, use_str, use_unix, warn(A-4-33-40-41-42-43-34-44) }
+/Users/KevinYoon/.ocamlbrew/ocaml-4.02.2/bin/ocamldep.opt -modules miniml.ml > miniml.ml.depends # cached
+# Target: evaluation.ml.depends, tags: { extension:ml, file:evaluation.ml, ocaml, ocamldep, quiet, strict-sequence, thread, traverse, use_graphics, use_str, use_unix, warn(A-4-33-40-41-42-43-34-44) }
+/Users/KevinYoon/.ocamlbrew/ocaml-4.02.2/bin/ocamldep.opt -modules evaluation.ml > evaluation.ml.depends
+# Target: expr.mli.depends, tags: { extension:mli, file:expr.mli, ocaml, ocamldep, quiet, strict-sequence, thread, traverse, use_graphics, use_str, use_unix, warn(A-4-33-40-41-42-43-34-44) }
+/Users/KevinYoon/.ocamlbrew/ocaml-4.02.2/bin/ocamldep.opt -modules expr.mli > expr.mli.depends # cached
+# Target: expr.cmi, tags: { byte, compile, extension:mli, file:expr.mli, interf, ocaml, quiet, strict-sequence, thread, traverse, use_graphics, use_str, use_unix, warn(A-4-33-40-41-42-43-34-44) }
+/Users/KevinYoon/.ocamlbrew/ocaml-4.02.2/bin/ocamlc.opt -c -thread -strict-sequence -w A-4-33-40-41-42-43-34-44 -o expr.cmi expr.mli # cached
+# Target: miniml_lex.mll, tags: { extension:mll, file:miniml_lex.mll, lexer, ocaml, ocamllex, quiet, strict-sequence, thread, traverse, use_graphics, use_str, use_unix, warn(A-4-33-40-41-42-43-34-44) }
+/Users/KevinYoon/.ocamlbrew/ocaml-4.02.2/bin/ocamllex.opt -q miniml_lex.mll # cached
+# Target: miniml_lex.ml.depends, tags: { extension:ml, file:miniml_lex.ml, ocaml, ocamldep, quiet, strict-sequence, thread, traverse, use_graphics, use_str, use_unix, warn(A-4-33-40-41-42-43-34-44) }
+/Users/KevinYoon/.ocamlbrew/ocaml-4.02.2/bin/ocamldep.opt -modules miniml_lex.ml > miniml_lex.ml.depends # cached
+# Target: miniml_parse.mly, tags: { extension:mly, file:miniml_parse.mly, infer, ocaml, ocamlyacc, parser, quiet, strict-sequence, thread, traverse, use_graphics, use_str, use_unix, warn(A-4-33-40-41-42-43-34-44) }
+/Users/KevinYoon/.ocamlbrew/ocaml-4.02.2/bin/ocamlyacc miniml_parse.mly # cached
+# Target: miniml_parse.mli.depends, tags: { extension:mli, file:miniml_parse.mli, ocaml, ocamldep, quiet, strict-sequence, thread, traverse, use_graphics, use_str, use_unix, warn(A-4-33-40-41-42-43-34-44) }
+/Users/KevinYoon/.ocamlbrew/ocaml-4.02.2/bin/ocamldep.opt -modules miniml_parse.mli > miniml_parse.mli.depends # cached
+# Target: miniml_parse.cmi, tags: { byte, compile, extension:mli, file:miniml_parse.mli, interf, ocaml, quiet, strict-sequence, thread, traverse, use_graphics, use_str, use_unix, warn(A-4-33-40-41-42-43-34-44) }
+/Users/KevinYoon/.ocamlbrew/ocaml-4.02.2/bin/ocamlc.opt -c -thread -strict-sequence -w A-4-33-40-41-42-43-34-44 -o miniml_parse.cmi miniml_parse.mli # cached
+# Target: miniml_lex.cmo, tags: { byte, compile, extension:cmo, extension:ml, file:miniml_lex.cmo, file:miniml_lex.ml, implem, ocaml, quiet, strict-sequence, thread, traverse, use_graphics, use_str, use_unix, warn(A-4-33-40-41-42-43-34-44) }
+/Users/KevinYoon/.ocamlbrew/ocaml-4.02.2/bin/ocamlc.opt -c -thread -strict-sequence -w A-4-33-40-41-42-43-34-44 -o miniml_lex.cmo miniml_lex.ml # cached
+# Target: evaluation.cmo, tags: { byte, compile, extension:cmo, extension:ml, file:evaluation.cmo, file:evaluation.ml, implem, ocaml, quiet, strict-sequence, thread, traverse, use_graphics, use_str, use_unix, warn(A-4-33-40-41-42-43-34-44) }
+/Users/KevinYoon/.ocamlbrew/ocaml-4.02.2/bin/ocamlc.opt -c -thread -strict-sequence -w A-4-33-40-41-42-43-34-44 -o evaluation.cmo evaluation.ml
++ /Users/KevinYoon/.ocamlbrew/ocaml-4.02.2/bin/ocamlc.opt -c -thread -strict-sequence -w A-4-33-40-41-42-43-34-44 -o evaluation.cmo evaluation.ml
+File "evaluation.ml", line 210, characters 2-165:
+Warning 8: this pattern-matching is not exhaustive.
+Here is an example of a value that is not matched:
+Val _
+File "evaluation.ml", line 37, characters 4-24:
+Warning 38: unused extension constructor EnvUnbound.
+File "evaluation.ml", line 53, characters 11-19:
+Warning 27: unused variable variable.
+File "evaluation.ml", line 55, characters 22-23:
+Warning 27: unused variable b.
+File "evaluation.ml", line 154, characters 19-22:
+Warning 27: unused variable env.
+File "evaluation.ml", line 208, characters 7-8:
+Warning 27: unused variable v.
+File "evaluation.ml", line 208, characters 10-11:
+Warning 27: unused variable e.
+# Target: miniml.cmo, tags: { byte, compile, extension:cmo, extension:ml, file:miniml.cmo, file:miniml.ml, implem, ocaml, quiet, strict-sequence, thread, traverse, use_graphics, use_str, use_unix, warn(A-4-33-40-41-42-43-34-44) }
+/Users/KevinYoon/.ocamlbrew/ocaml-4.02.2/bin/ocamlc.opt -c -thread -strict-sequence -w A-4-33-40-41-42-43-34-44 -o miniml.cmo miniml.ml # cached
+# Target: expr.ml.depends, tags: { extension:ml, file:expr.ml, ocaml, ocamldep, quiet, strict-sequence, thread, traverse, use_graphics, use_str, use_unix, warn(A-4-33-40-41-42-43-34-44) }
+/Users/KevinYoon/.ocamlbrew/ocaml-4.02.2/bin/ocamldep.opt -modules expr.ml > expr.ml.depends # cached
+# Target: expr.cmo, tags: { byte, compile, extension:cmo, extension:ml, file:expr.cmo, file:expr.ml, implem, ocaml, quiet, strict-sequence, thread, traverse, use_graphics, use_str, use_unix, warn(A-4-33-40-41-42-43-34-44) }
+/Users/KevinYoon/.ocamlbrew/ocaml-4.02.2/bin/ocamlc.opt -c -thread -strict-sequence -w A-4-33-40-41-42-43-34-44 -o expr.cmo expr.ml # cached
+# Target: miniml_parse.ml.depends, tags: { extension:ml, file:miniml_parse.ml, ocaml, ocamldep, quiet, strict-sequence, thread, traverse, use_graphics, use_str, use_unix, warn(A-4-33-40-41-42-43-34-44) }
+/Users/KevinYoon/.ocamlbrew/ocaml-4.02.2/bin/ocamldep.opt -modules miniml_parse.ml > miniml_parse.ml.depends # cached
+# Target: miniml_parse.cmo, tags: { byte, compile, extension:cmo, extension:ml, file:miniml_parse.cmo, file:miniml_parse.ml, implem, ocaml, quiet, strict-sequence, thread, traverse, use_graphics, use_str, use_unix, warn(A-4-33-40-41-42-43-34-44) }
+/Users/KevinYoon/.ocamlbrew/ocaml-4.02.2/bin/ocamlc.opt -c -thread -strict-sequence -w A-4-33-40-41-42-43-34-44 -o miniml_parse.cmo miniml_parse.ml # cached
+# Target: miniml.byte, tags: { byte, dont_link_with, extension:byte, file:miniml.byte, link, ocaml, program, quiet, strict-sequence, thread, traverse, use_graphics, use_str, use_unix, warn(A-4-33-40-41-42-43-34-44) }
+/Users/KevinYoon/.ocamlbrew/ocaml-4.02.2/bin/ocamlc.opt unix.cma str.cma graphics.cma -thread threads.cma expr.cmo evaluation.cmo miniml_parse.cmo miniml_lex.cmo miniml.cmo -o miniml.byte
+# Compilation successful.
